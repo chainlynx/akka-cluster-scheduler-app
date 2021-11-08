@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: akka-cluster-scheduler-node
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: akka-cluster-scheduler
+  template:
+    metadata:
+      labels:
+        app: akka-cluster-scheduler
+        tag: akka-cluster-scheduler-node
+      annotations:
+        prometheus.io/scrape: 'true'
+    spec:
+      serviceAccountName: nodes-sa
+      containers:
+        - name: akka-cluster-scheduler-node
+          image: gcr.io/gsa-sandbox-249915/akka-scheduler/akka-cluster-scheduler-app:latest
+          #health
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: akka-mgmt-http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /alive
+              port: akka-mgmt-http
+            initialDelaySeconds: 90
+            periodSeconds: 30
+          #health
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.podIP
+            - name: CASSANDRA_CONTACT_POINT1
+              value: "cassandra-db:9042"
+            - name: JAVA_OPTS
+              value: "-Dconfig.resource=cluster-application-k8s.conf"
+          ports:
+            # akka remoting
+            - name: remoting
+              containerPort: 2552
+              protocol: TCP
+            # external http
+            - name: akka-mgmt-http
+              containerPort: 8558
+              protocol: TCP
+            - name: node-metrics
+              containerPort: 9001
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nodes-sa
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: akka-cluster-member
+rules:
+  - apiGroups: [""] # "" indicates the core API group
+    resources: ["pods"]
+    verbs: ["get", "watch", "list"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: nodes-akka-cluster
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: akka-cluster-member
+subjects:
+  - kind: ServiceAccount
+    name: nodes-sa
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: akka-cluster-scheduler-node
+spec:
+  type: NodePort
+  ports:
+    - name: akka-mgmt-http
+      protocol: TCP
+      port: 8558
+      targetPort: akka-mgmt-http
+      nodePort: 30558
+  selector:
+    tag: akka-cluster-scheduler-node
